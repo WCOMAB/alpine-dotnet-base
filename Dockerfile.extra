@@ -1,0 +1,34 @@
+ARG ALPINE_VERSION=3.24
+ARG BASE_IMAGE=acrwcom.azurecr.io/alpine-dotnet-base:${ALPINE_VERSION}
+
+# Build stage: the DHI kit variant has apk, used to fetch ICU and time zone data.
+# libstdc++ and libgcc are installed first so the diff below only picks up the
+# packages that aren't already in the base image. Copies exactly the files each
+# new package owns, plus their apk database entries, so vulnerability scanners
+# and SBOM tools see them in the final image.
+FROM dhi.io/alpine-base:${ALPINE_VERSION}-kit AS deps
+USER 0
+RUN apk add --no-cache libstdc++ libgcc \
+    && apk info | sort > /installed-before \
+    && apk add --no-cache icu-libs icu-data-full tzdata \
+    && apk info | sort | comm -13 /installed-before - > /new \
+    && mkdir -p /out /db \
+    && apk info -qL $(cat /new) | grep . | tar -C / -cf - -T - | tar -C /out -xf - \
+    && awk -v pkgs="$(cat /new)" ' \
+        BEGIN { RS = ""; ORS = "\n\n"; n = split(pkgs, p); for (i = 1; i <= n; i++) want[p[i]] = 1 } \
+        match($0, /(^|\n)P:[^\n]*/) { name = substr($0, RSTART, RLENGTH); sub(/^\n?P:/, "", name); if (name in want) print }' \
+        /lib/apk/db/installed > /db/installed
+
+# Final stage: alpine-dotnet-base plus ICU (all cultures) and time zone data.
+# Equivalent to mcr.microsoft.com/dotnet/runtime-deps:*-alpine-extra.
+FROM ${BASE_IMAGE}
+COPY --from=deps /out/ /
+
+# Register the copied packages in the apk database.
+USER 0
+RUN --mount=type=bind,from=deps,source=/db,target=/db \
+    cat /db/installed >> /lib/apk/db/installed
+
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+
+USER $APP_UID

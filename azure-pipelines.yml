@@ -28,6 +28,8 @@ jobs:
       value: '3.24'
     - name: imageName
       value: acrwcom.azurecr.io/alpine-dotnet-base
+    - name: extraImageName
+      value: acrwcom.azurecr.io/alpine-dotnet-base-extra
     - name: isMain
       value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
   steps:
@@ -60,6 +62,33 @@ jobs:
         echo "OK"'
     displayName: Verify Image
 
+  - script: |
+      docker build \
+        -f Dockerfile.extra \
+        --build-arg ALPINE_VERSION=$(alpineVersion) \
+        --build-arg BASE_IMAGE=$(imageName):$(Build.BuildNumber) \
+        -t $(extraImageName):latest \
+        -t $(extraImageName):$(alpineVersion) \
+        -t $(extraImageName):$(Build.BuildNumber) \
+        .
+    displayName: Docker Build Extra
+    env:
+      DOCKER_BUILDKIT: 1
+
+  - script: |
+      set -e
+      docker run --rm --entrypoint /bin/sh $(extraImageName):$(Build.BuildNumber) -c '
+        set -e
+        id
+        test "$(id -u)" = "1654"
+        test "$DOTNET_SYSTEM_GLOBALIZATION_INVARIANT" = "false"
+        test -e /usr/lib/libstdc++.so.6
+        ls /usr/lib/libicuuc.so.*
+        ls /usr/share/icu/*/icudt*l.dat
+        test -e /usr/share/zoneinfo/Europe/Stockholm
+        echo "OK"'
+    displayName: Verify Extra Image
+
   - task: AzureCLI@3.279.1
     displayName: Docker Build and Push
     inputs:
@@ -77,6 +106,19 @@ jobs:
           --output type=registry,compression=gzip,compression-level=9,force-compression=true \
           .
         build_status=$?
+        # Extra image on top of the base image this run just pushed.
+        if [ $build_status -eq 0 ]; then
+          docker buildx build \
+            -f Dockerfile.extra \
+            --build-arg ALPINE_VERSION=$(alpineVersion) \
+            --build-arg BASE_IMAGE=$(imageName):$(Build.BuildNumber) \
+            --tag "$(extraImageName):latest" \
+            --tag "$(extraImageName):$(alpineVersion)" \
+            --tag "$(extraImageName):$(Build.BuildNumber)" \
+            --output type=registry,compression=gzip,compression-level=9,force-compression=true \
+            .
+          build_status=$?
+        fi
         docker logout acrwcom.azurecr.io || true
         exit $build_status
     condition: and(succeeded(), eq(variables.isMain, true))

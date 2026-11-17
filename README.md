@@ -12,9 +12,19 @@ The hardened `dhi.io/alpine-base` (musl, OpenSSL, CA certificates, BusyBox shell
 * non-root `app` user, uid/gid `1654`, set as the default user (same as the Microsoft .NET images)
 * `ASPNETCORE_HTTP_PORTS=8080`, `DOTNET_RUNNING_IN_CONTAINER=true`, `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true`
 
-No .NET runtime is included. It is the equivalent of `mcr.microsoft.com/dotnet/runtime-deps:*-alpine`, so apps must be published self-contained for `linux-musl-x64`. No ICU or time zone data either; set `<InvariantGlobalization>true</InvariantGlobalization>` in the app's project.
+No .NET runtime is included. It is the equivalent of `mcr.microsoft.com/dotnet/runtime-deps:*-alpine`, so apps must be published self-contained for `linux-musl-x64`. No ICU or time zone data either; set `<InvariantGlobalization>true</InvariantGlobalization>` in the app's project, or use the [extra image](#extra-image).
 
 Image layers are pushed gzip-compressed, as the .NET SDK container tooling can't read the zstd layers of `dhi.io` images directly.
+
+## Extra image
+
+`acrwcom.azurecr.io/alpine-dotnet-base-extra` is built on top of the base image by the same pipeline run, and adds:
+
+* `icu-libs` and `icu-data-full` (all cultures), for culture-aware formatting, sorting and `CultureInfo`
+* `tzdata`, for `TimeZoneInfo` lookups by IANA or Windows id
+* `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false`
+
+Like the base image, the packages come from the DHI package repository and are registered in the apk database. It is the equivalent of `mcr.microsoft.com/dotnet/runtime-deps:*-alpine-extra`; use it when the app needs culture or time zone data, and don't set `InvariantGlobalization`. It has the same tags as the base image.
 
 ## Tags
 
@@ -52,6 +62,7 @@ container:
 ```bash
 docker login dhi.io
 docker build -t alpine-dotnet-base .
+docker build -f Dockerfile.extra --build-arg BASE_IMAGE=alpine-dotnet-base -t alpine-dotnet-base-extra .
 ```
 
 The pipeline needs the `common-build-variables` group (`dhi.io.username`, `dhi.io.password`) and the `WCOM ACR Push` service connection.

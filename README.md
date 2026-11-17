@@ -8,7 +8,7 @@ Published to `acrwcom.azurecr.io/alpine-dotnet-base`.
 
 The hardened `dhi.io/alpine-base` (musl, OpenSSL, CA certificates, BusyBox shell) plus:
 
-* `libstdc++` and `libgcc`, needed by the .NET host
+* `libstdc++` and `libgcc`, needed by the .NET host, from the DHI package repository and registered in the apk database (`/lib/apk/db/installed`) so vulnerability scanners see them
 * non-root `app` user, uid/gid `1654`, set as the default user (same as the Microsoft .NET images)
 * `ASPNETCORE_HTTP_PORTS=8080`, `DOTNET_RUNNING_IN_CONTAINER=true`, `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true`
 

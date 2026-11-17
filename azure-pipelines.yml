@@ -1,0 +1,88 @@
+name: $(Year:yyyy).$(Month).$(DayOfMonth)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - README.md
+      - renovate.json
+
+# Rebuild weekly so security fixes in the Docker Hardened Images base are picked up.
+schedules:
+  - cron: '0 3 * * 1'
+    displayName: Weekly rebuild
+    branches:
+      include:
+        - main
+    always: true
+
+jobs:
+- job: Docker
+  pool:
+    vmImage: ubuntu-26.04
+  variables:
+    - group: common-build-variables
+    - name: alpineVersion
+      value: '3.24'
+    - name: imageName
+      value: acrwcom.azurecr.io/alpine-dotnet-base
+    - name: isMain
+      value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+  steps:
+  - script: echo "$DHI_PASSWORD" | docker login dhi.io --username "$DHI_USERNAME" --password-stdin
+    displayName: Docker Login dhi.io
+    env:
+      DHI_USERNAME: $(dhi.io.username)
+      DHI_PASSWORD: $(dhi.io.password)
+
+  - script: |
+      docker build --pull \
+        --build-arg ALPINE_VERSION=$(alpineVersion) \
+        -t $(imageName):latest \
+        -t $(imageName):$(alpineVersion) \
+        -t $(imageName):$(Build.BuildNumber) \
+        .
+    displayName: Docker Build
+    env:
+      DOCKER_BUILDKIT: 1
+
+  - script: |
+      set -e
+      docker run --rm --entrypoint /bin/sh $(imageName):$(Build.BuildNumber) -c '
+        set -e
+        id
+        test "$(id -u)" = "1654"
+        test -e /usr/lib/libstdc++.so.6
+        test -e /usr/lib/libgcc_s.so.1
+        test -e /etc/ssl/certs/ca-certificates.crt
+        echo "OK"'
+    displayName: Verify Image
+
+  - task: AzureCLI@3.279.1
+    displayName: Docker Build and Push
+    inputs:
+      azureSubscription: WCOM ACR Push
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        az acr login --name acrwcom
+        # gzip (not zstd) layers: the .NET SDK container tooling can't read zstd layers.
+        docker buildx build \
+          --build-arg ALPINE_VERSION=$(alpineVersion) \
+          --tag "$(imageName):latest" \
+          --tag "$(imageName):$(alpineVersion)" \
+          --tag "$(imageName):$(Build.BuildNumber)" \
+          --output type=registry,compression=gzip,compression-level=9,force-compression=true \
+          .
+        build_status=$?
+        docker logout acrwcom.azurecr.io || true
+        exit $build_status
+    condition: and(succeeded(), eq(variables.isMain, true))
+    env:
+      DOCKER_BUILDKIT: 1
+
+  - script: docker logout dhi.io || true
+    displayName: Docker Logout dhi.io
+    condition: always()

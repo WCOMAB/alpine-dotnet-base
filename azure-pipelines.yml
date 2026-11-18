@@ -111,7 +111,8 @@ jobs:
       image=$(miniImageName):$(Build.BuildNumber)
       test "$(docker image inspect --format '{{.Config.User}}' $image)" = "1654"
       test "$(docker image inspect --format '{{len .RootFS.Layers}}' $image)" = "1"
-      container=$(docker create $image)
+      # docker create needs a command; the image has none, and the container is never started.
+      container=$(docker create --entrypoint /lib/ld-musl-x86_64.so.1 $image)
       docker export $container | tar -t | sed 's|/$||' | sort > files.txt
       docker rm $container > /dev/null
       cat files.txt

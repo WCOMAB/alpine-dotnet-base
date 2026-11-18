@@ -30,6 +30,8 @@ jobs:
       value: acrwcom.azurecr.io/alpine-dotnet-base
     - name: extraImageName
       value: acrwcom.azurecr.io/alpine-dotnet-base-extra
+    - name: miniImageName
+      value: acrwcom.azurecr.io/alpine-dotnet-base-mini
     - name: isMain
       value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
   steps:
@@ -89,6 +91,44 @@ jobs:
         echo "OK"'
     displayName: Verify Extra Image
 
+  - script: |
+      docker build \
+        -f Dockerfile.mini \
+        --build-arg ALPINE_VERSION=$(alpineVersion) \
+        --build-arg BASE_IMAGE=$(imageName):$(Build.BuildNumber) \
+        -t $(miniImageName):latest \
+        -t $(miniImageName):$(alpineVersion) \
+        -t $(miniImageName):$(Build.BuildNumber) \
+        .
+    displayName: Docker Build Mini
+    env:
+      DOCKER_BUILDKIT: 1
+
+  # The mini image has no shell, so its file system is checked from the agent, and the
+  # musl loader itself is run to resolve the C++ runtime's dependencies.
+  - script: |
+      set -e
+      image=$(miniImageName):$(Build.BuildNumber)
+      test "$(docker image inspect --format '{{.Config.User}}' $image)" = "1654"
+      test "$(docker image inspect --format '{{len .RootFS.Layers}}' $image)" = "1"
+      container=$(docker create $image)
+      docker export $container | tar -t | sed 's|/$||' | sort > files.txt
+      docker rm $container > /dev/null
+      cat files.txt
+      for f in etc/passwd etc/group etc/os-release etc/ssl/certs/ca-certificates.crt \
+               lib/ld-musl-x86_64.so.1 lib/apk/db/installed \
+               usr/lib/libssl.so.3 usr/lib/libcrypto.so.3 usr/lib/libstdc++.so.6 usr/lib/libgcc_s.so.1 \
+               tmp home/app; do
+        grep -qx "$f" files.txt || { echo "missing: $f"; exit 1; }
+      done
+      for f in bin/sh bin/busybox usr/bin/ssl_client etc/apk opt/docker; do
+        if grep -qx "$f" files.txt; then echo "unexpected: $f"; exit 1; fi
+      done
+      if grep -vE '^(\.|etc|home|lib|tmp|usr)(/|$)' files.txt; then echo "unexpected top-level entries"; exit 1; fi
+      docker run --rm --entrypoint /lib/ld-musl-x86_64.so.1 $image --list /usr/lib/libstdc++.so.6
+      echo "OK"
+    displayName: Verify Mini Image
+
   - task: AzureCLI@3.279.1
     displayName: Docker Build and Push
     inputs:
@@ -116,6 +156,20 @@ jobs:
             --tag "$(extraImageName):$(alpineVersion)" \
             --tag "$(extraImageName):$(Build.BuildNumber)" \
             --output type=registry,compression=gzip,compression-level=9,force-compression=true \
+            .
+          build_status=$?
+        fi
+        # Mini image from the same base. Timestamps are rewritten to the last commit's time,
+        # so an unchanged rebuild gives the same single layer and clients don't pull it again.
+        if [ $build_status -eq 0 ]; then
+          SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct) docker buildx build \
+            -f Dockerfile.mini \
+            --build-arg ALPINE_VERSION=$(alpineVersion) \
+            --build-arg BASE_IMAGE=$(imageName):$(Build.BuildNumber) \
+            --tag "$(miniImageName):latest" \
+            --tag "$(miniImageName):$(alpineVersion)" \
+            --tag "$(miniImageName):$(Build.BuildNumber)" \
+            --output type=registry,compression=gzip,compression-level=9,force-compression=true,rewrite-timestamp=true \
             .
           build_status=$?
         fi

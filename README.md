@@ -26,6 +26,20 @@ Image layers are pushed gzip-compressed, as the .NET SDK container tooling can't
 
 Like the base image, the packages come from the DHI package repository and are registered in the apk database. It is the equivalent of `mcr.microsoft.com/dotnet/runtime-deps:*-alpine-extra`; use it when the app needs culture or time zone data, and don't set `InvariantGlobalization`. It has the same tags as the base image.
 
+## Mini image
+
+`acrwcom.azurecr.io/alpine-dotnet-base-mini` holds only what a self-contained .NET app needs at runtime, assembled from the base image of the same pipeline run into a single layer on `scratch`:
+
+* the `musl`, `libcrypto3`, `libssl3`, `ca-certificates-bundle`, `libstdc++` and `libgcc` packages, complete and registered in the apk database (`/lib/apk/db/installed`)
+* `/etc/os-release`, so vulnerability scanners detect Alpine
+* `/etc/passwd` and `/etc/group` with `root` and the `app` user (uid/gid `1654`, the default user)
+* `/tmp` (for .NET diagnostics sockets) and `/home/app`
+* the same environment variables as the base image
+
+Compared with the base image it leaves out the BusyBox shell and tools, `ssl_client` (only used by BusyBox `wget`; .NET loads OpenSSL directly), `alpine-baselayout-data`, the apk keys and repositories, and the DHI SBOM file (the apk database lists the packages instead).
+
+There is no shell, so `docker exec … sh` doesn't work; use `docker cp`, `docker export` or a debug container to inspect it. Globalization is invariant only, as in the base image. It has the same tags as the base image.
+
 ## Tags
 
 * `latest`
@@ -63,6 +77,7 @@ container:
 docker login dhi.io
 docker build -t alpine-dotnet-base .
 docker build -f Dockerfile.extra --build-arg BASE_IMAGE=alpine-dotnet-base -t alpine-dotnet-base-extra .
+docker build -f Dockerfile.mini --build-arg BASE_IMAGE=alpine-dotnet-base -t alpine-dotnet-base-mini .
 ```
 
 The pipeline needs the `common-build-variables` group (`dhi.io.username`, `dhi.io.password`) and the `WCOM ACR Push` service connection.

@@ -1,0 +1,39 @@
+ARG ALPINE_VERSION=3.24
+ARG BASE_IMAGE=acrwcom.azurecr.io/alpine-dotnet-base:${ALPINE_VERSION}
+
+FROM ${BASE_IMAGE} AS base
+
+# Build stage: assemble a minimal root filesystem from alpine-dotnet-base, using the
+# DHI kit variant's apk to read the base image's package database. Keeps only the
+# packages a self-contained .NET app needs at runtime, complete and with their apk
+# database entries so vulnerability scanners see them: musl (C library and loader),
+# OpenSSL (TLS, loaded by .NET's crypto shim), the CA bundle, and the C++ runtime
+# the .NET host links against. No BusyBox shell or tools, no apk metadata.
+FROM dhi.io/alpine-base:${ALPINE_VERSION}-kit AS rootfs
+USER 0
+RUN --mount=type=bind,from=base,target=/base,rw \
+    pkgs="musl libcrypto3 libssl3 ca-certificates-bundle libstdc++ libgcc" \
+    && mkdir -p /rootfs/lib/apk/db /rootfs/etc /rootfs/tmp /rootfs/home/app \
+    && apk --root /base info -qL $pkgs | grep . | tar -C /base -cf - -T - | tar -C /rootfs -xf - \
+    && awk -v pkgs="$pkgs" ' \
+        BEGIN { RS = ""; ORS = "\n\n"; n = split(pkgs, p); for (i = 1; i <= n; i++) want[p[i]] = 1 } \
+        match($0, /(^|\n)P:[^\n]*/) { name = substr($0, RSTART, RLENGTH); sub(/^\n?P:/, "", name); if (name in want) print }' \
+        /base/lib/apk/db/installed > /rootfs/lib/apk/db/installed \
+    && cp -L /base/etc/os-release /rootfs/etc/os-release \
+    && printf 'root:x:0:0:root:/root:/sbin/nologin\napp:x:1654:1654::/home/app:/sbin/nologin\n' > /rootfs/etc/passwd \
+    && printf 'root:x:0:\napp:x:1654:\n' > /rootfs/etc/group \
+    && chmod 1777 /rootfs/tmp \
+    && chown 1654:1654 /rootfs/home/app
+
+# Final stage: a single layer with exactly the assembled files. Equivalent to
+# alpine-dotnet-base without a shell, for self-contained apps published with
+# --runtime linux-musl-x64 --self-contained.
+FROM scratch
+COPY --from=rootfs /rootfs/ /
+
+ENV APP_UID=1654 \
+    ASPNETCORE_HTTP_PORTS=8080 \
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true
+
+USER $APP_UID

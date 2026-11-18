@@ -111,10 +111,12 @@ jobs:
       image=$(miniImageName):$(Build.BuildNumber)
       test "$(docker image inspect --format '{{.Config.User}}' $image)" = "1654"
       test "$(docker image inspect --format '{{len .RootFS.Layers}}' $image)" = "1"
-      # docker create needs a command; the image has none, and the container is never started.
-      container=$(docker create --entrypoint /lib/ld-musl-x86_64.so.1 $image)
-      docker export $container | tar -t | sed 's|/$||' | sort > files.txt
-      docker rm $container > /dev/null
+      # List the image's single layer itself, not a container export (which adds /dev, /proc, ...).
+      rm -rf mini-image && mkdir mini-image
+      docker image save $image | tar -x -C mini-image
+      layer=$(python3 -c "import json; print(json.load(open('mini-image/manifest.json'))[0]['Layers'][0])")
+      tar -tf "mini-image/$layer" | sed 's|^\./||; s|/$||' | grep . | sort > files.txt
+      rm -rf mini-image
       cat files.txt
       for f in etc/passwd etc/group etc/os-release etc/ssl/certs/ca-certificates.crt \
                lib/ld-musl-x86_64.so.1 lib/apk/db/installed \
